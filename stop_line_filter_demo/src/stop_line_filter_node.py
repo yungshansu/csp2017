@@ -17,7 +17,7 @@ class StopLineFilterNode(object):
         ## params
         self.stop_distance = self.setupParam("~stop_distance", 0.2) # distance from the stop line that we should stop 
         self.min_segs      = self.setupParam("~min_segs", 2) # minimum number of red segments that we should detect to estimate a stop
-        self.off_time      = self.setupParam("~off_time", 2)
+        self.off_time      = self.setupParam("~off_time", 2) # State transition buffer time
         self.lanewidth = 0 # updated continuously below
 
         self.state = "JOYSTICK_CONTROL"
@@ -32,19 +32,19 @@ class StopLineFilterNode(object):
 
         self.params_update = rospy.Timer(rospy.Duration.from_sec(1.0), self.updateParams)
 
-    def setupParam(self,param_name,default_value):
+    def setupParam(self,param_name,default_value):          #Set up param value  (used in line 18,19,20)
         value = rospy.get_param(param_name,default_value)
         rospy.set_param(param_name,value) #Write to parameter server for transparancy
         rospy.loginfo("[%s] %s = %s " %(self.node_name,param_name,value))
         return value
 
-    def updateParams(self,event):
+    def updateParams(self,event):                           #Update param value, so that you can revise the stop lane parameter while car is running  (used in line 33)
         self.lanewidth = rospy.get_param("~lanewidth")
         self.stop_distance = rospy.get_param("~stop_distance")
         self.min_segs      = rospy.get_param("~min_segs")
         self.off_time      = rospy.get_param("~off_time")
 
-    def processStateChange(self, msg):
+    def processStateChange(self, msg):                      #Handle state transition exception and update state
         if self.state == "INTERSECTION_CONTROL" and (msg.state == "LANE_FOLLOWING" or msg.state == "PARALLEL_AUTONOMY"):
             rospy.loginfo("stop line sleep start")
             self.sleep = True
@@ -56,10 +56,10 @@ class StopLineFilterNode(object):
     def cbSwitch(self, switch_msg):
         self.active = switch_msg.data
 
-    def processLanePose(self, lane_pose_msg):
+    def processLanePose(self, lane_pose_msg):               #Assign lane pose
         self.lane_pose = lane_pose_msg
 
-    def processSegments(self, segment_list_msg):
+    def processSegments(self, segment_list_msg):            #Process segment list and decide whether there is a stop line.
         if not self.active or self.sleep:
             return
         good_seg_count=0
@@ -70,9 +70,10 @@ class StopLineFilterNode(object):
                 continue
             if segment.points[0].x < 0 or segment.points[1].x < 0: # the point is behind us 
                 continue
-
-            p1_lane = self.to_lane_frame(segment.points[0])
+            ###Transform segment list to lane pose frame
+            p1_lane = self.to_lane_frame(segment.points[0]) 
             p2_lane = self.to_lane_frame(segment.points[1])
+            ###Find average x and y of the red line segment
             avg_x = 0.5*(p1_lane[0] + p2_lane[0])
             avg_y = 0.5*(p1_lane[1] + p2_lane[1])
             stop_line_x_accumulator += avg_x
@@ -81,24 +82,32 @@ class StopLineFilterNode(object):
 
         stop_line_reading_msg = StopLineReading()
         stop_line_reading_msg.header.stamp = segment_list_msg.header.stamp
-        if (good_seg_count < self.min_segs):
+        if (good_seg_count < self.min_segs): #If red line segment is lower that threshold, then, there is no stop line
             stop_line_reading_msg.stop_line_detected = False
             stop_line_reading_msg.at_stop_line = False
             self.pub_stop_line_reading.publish(stop_line_reading_msg)
             return
-        
-        stop_line_reading_msg.stop_line_detected = True
-        stop_line_point = Point()
-        stop_line_point.x = stop_line_x_accumulator/good_seg_count
-        stop_line_point.y = stop_line_y_accumulator/good_seg_count
-        stop_line_reading_msg.stop_line_point = stop_line_point
-        stop_line_reading_msg.at_stop_line = stop_line_point.x < self.stop_distance and math.fabs(stop_line_point.y) < self.lanewidth/4 
-        self.pub_stop_line_reading.publish(stop_line_reading_msg)    
-        if stop_line_reading_msg.at_stop_line:
-            msg = BoolStamped()
-            msg.header.stamp = stop_line_reading_msg.header.stamp
-            msg.data = True
-            self.pub_at_stop_line.publish(msg)
+        else:
+            stop_line_reading_msg.stop_line_detected = True
+            stop_line_point = Point()
+            stop_line_point.x = stop_line_x_accumulator/good_seg_count
+            stop_line_point.y = stop_line_y_accumulator/good_seg_count
+            stop_line_reading_msg.stop_line_point = stop_line_point
+            stop_line_reading_msg.at_stop_line = stop_line_point.x < self.stop_distance and math.fabs(stop_line_point.y) < self.lanewidth/4 
+            self.pub_stop_line_reading.publish(stop_line_reading_msg)    
+            if stop_line_reading_msg.at_stop_line:
+                ###Task: assign fsm stop line message, if message data is true, then it will trigger stop event 
+                ###Problem
+                msg =  ?????                #Declaration
+                msg.header.stamp = ?????    #Assign segment_list time stamp
+                msg.data = ?????            #If you want to trigger the event at_stop_line, message data must be "true" 
+                ###Answer
+                msg = BoolStamped()
+                msg.header.stamp = stop_line_reading_msg.header.stamp
+                msg.data = True
+                print "Event stop line fiter is triggered ? :"+msg.data
+
+                self.pub_at_stop_line.publish(msg)
    
     def to_lane_frame(self, point):
         p_homo = np.array([point.x,point.y,1])
